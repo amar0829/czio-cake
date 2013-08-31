@@ -1,0 +1,786 @@
+<?php
+class ListContactsController extends AppController{
+
+	public $name = "ListContacts";
+	public $uses = array('ListContact');
+/**
+ * beforeFilter
+ *
+ * @return void
+ * @access public
+ */
+	public $components = array(
+		'Email',
+	);
+	public function beforeFilter() {
+		parent::beforeFilter();
+	}
+
+	public function index() 
+	{
+		$this->set('title_for_layout', __('Member List Contacts'));
+		$this->layout = 'admin';
+	}
+	public function add() 
+	{
+
+		$this->set('title_for_layout', __('Add new contact'));
+		$this->loadModel('MemberList');
+		$this->loadModel('User');
+		$this->loadModel('Plan');
+		$this->loadModel('UserPlanRelation');
+		$this->loadModel('ContactListRelation');
+		$user_id = $this->Auth->user('id');		
+		$default_plan_id = 9;
+		$memberList = $this->MemberList->find('list',array('conditions' => array('user_id' => $user_id),'order' => array('MemberList.created' => 'DESC')));
+		$currentPlan = $this->UserPlanRelation->find('all', array('conditions' => array('UserPlanRelation.user_id' =>$user_id,'UserPlanRelation.status' => 'active')));
+			
+		$error_list = '';
+		$this->layout = 'admin';
+		$listIdArray = "";
+		
+		if(!empty($this->request->data))
+		{	
+		
+		if(count($currentPlan))
+		{
+			$default_plan_id = $currentPlan[0]['UserPlanRelation']['plan_id'];
+		}
+
+		$countmemberList = $this->MemberList->find('list',array('fields' => array('id'),'conditions' => array('MemberList.user_id' => $user_id),'order' => array('MemberList.created' => 'DESC')));
+		
+		$total = 0;
+		
+		foreach ($countmemberList as $mem)
+		{
+		  	$countcontacts = $this->ContactListRelation->find('count', array( 'conditions' => array('ContactListRelation.member_list_id' => $mem) ));
+		  	$total = $countcontacts+$total;
+		}
+		$memberlistcount = count($this->request->data['ListContact']['memberlist']);
+		$total = $memberlistcount + $total;
+		
+		$subscriber_limit = $this->Plan->find('first',array('fields' => array('subscriber_limit'),'conditions' => array('Plan.id' => $default_plan_id)));
+	    $subscriber_limit = $subscriber_limit['Plan']['subscriber_limit']; 
+	    if($total >$subscriber_limit)
+		{
+				 $this->Session->setFlash(__('Your account add contact limit has been reached. So now you can not add more contact.If still you want to add more contact you need to upgrade your plan.'), 'default', array('class' => 'error'));
+				 $this->redirect(array('action' => 'index'));
+		}
+			
+		
+			$this->loadModel('ListContact');
+		    $this->request->data['ListContact']['email'] = htmlspecialchars($this->request->data['ListContact']['email']);
+		    $this->request->data['ListContact']['prefix'] = htmlspecialchars($this->request->data['ListContact']['prefix']);
+		    $this->request->data['ListContact']['fname'] = htmlspecialchars($this->request->data['ListContact']['fname']);
+		    $this->request->data['ListContact']['lname'] = htmlspecialchars($this->request->data['ListContact']['lname']);
+		    $this->request->data['ListContact']['suffix'] = htmlspecialchars($this->request->data['ListContact']['suffix']);
+		    $this->request->data['ListContact']['address1'] = htmlspecialchars($this->request->data['ListContact']['address1']);
+		    $this->request->data['ListContact']['address2'] = htmlspecialchars($this->request->data['ListContact']['address2']);
+		    $this->request->data['ListContact']['city'] = htmlspecialchars($this->request->data['ListContact']['city']);
+		    $this->request->data['ListContact']['state'] = htmlspecialchars($this->request->data['ListContact']['state']);
+		    $this->request->data['ListContact']['zip'] = htmlspecialchars($this->request->data['ListContact']['zip']);
+		    $this->request->data['ListContact']['business'] = htmlspecialchars($this->request->data['ListContact']['business']);
+		    $this->request->data['ListContact']['phone'] = htmlspecialchars($this->request->data['ListContact']['phone']);
+		    $this->request->data['ListContact']['fax'] = htmlspecialchars($this->request->data['ListContact']['fax']);
+
+			$this->request->data['ListContact']['status'] = 1;
+			$this->ListContact->set($this->request->data);
+			if($this->ListContact->validates())
+			{ 
+				$listIdArray = $this->request->data['ListContact']['memberlist'];
+				if(is_array($this->request->data['ListContact']['memberlist']))
+				{
+					$this->ListContact->create();  
+					if($this->ListContact->save($this->request->data))
+					{
+						$contactId = $this->ListContact->getLastInsertID();
+						$memberListArray =  $this->request->data['ListContact']['memberlist'];
+					
+						$isConfirmed = 1;
+						if($this->request->data['ListContact']['confirm'])
+						{	
+							$isConfirmed = 0;
+						}
+						
+						
+						foreach ($memberListArray as $key => $val)
+						{
+							$memberSendStatus = 0;
+							$memberSendEmail  = 0;
+							$memberListName   = "";
+							$listId = $val;
+							$this->loadModel('ContactListRelation');
+							$this->request->data['ContactListRelation']['list_contact_id']=$contactId;
+							$this->request->data['ContactListRelation']['member_list_id']=$listId;
+							$this->request->data['ContactListRelation']['confirmed']=$isConfirmed;
+							if($isConfirmed)
+							{
+								$this->request->data['ContactListRelation']['status']='active';
+							}
+							$this->ContactListRelation->set($this->request->data);
+							$this->ContactListRelation->create();
+							$this->ContactListRelation->save($this->request->data);
+							$lastId = $this->ContactListRelation->getLastInsertId();
+							if(!$isConfirmed)
+							{
+								$this->sendConfirmation($this->request->data['ListContact']['email'],$lastId,$listId);
+							}
+								
+							$signupReceiver = $this->request->data['ListContact']['email'];
+							$listId = $listId;
+							$welcomeId = $this->checkWelcomeMessageEnableOnebyone($listId);
+							if(intval($welcomeId)&&$isConfirmed)
+							{
+								$this->sendSignupWelcomeMessage($welcomeId,$signupReceiver,'list',$lastId);
+							}
+							$sendMemberMail = $this->MemberList->find('first',array('conditions' => array('id' => $listId)));
+							if(count($sendMemberMail)>0)
+							{
+								$memberSendStatus = $sendMemberMail['MemberList']['email_notification'];
+								$memberListName	  = $sendMemberMail['MemberList']['name'];
+								$memberSendEmail  = $this->Auth->user('email');
+							}
+							if($memberSendStatus)
+							{
+								$this->sendAddContactMail($memberSendEmail,$signupReceiver,$memberListName,1);
+							}
+						}
+						$this->request->data=null;
+						$this->Session->setFlash('A new contact added to your list successfully.'); 
+						$this->redirect(array('action' => 'index'));
+					}
+				}
+				else 
+				{
+					//$this->ListContact->validationErrors['memberlist'] = 'You must check at least one list.';
+					$error_list = 'You must check at least one list.';
+				}
+			}
+			else 
+			{
+				if(isset($this->request->data['ListContact']['memberlist'])&&!is_array($this->request->data['ListContact']['memberlist']))
+				{
+					//$this->ListContact->validationErrors['memberlist'] = 'You must check at least one list.';
+					$error_list = 'You must create list first.';
+				}	
+			}
+			
+			
+		}
+		
+		$this->set(compact('memberList','error_list','listIdArray'));
+	}
+	public function browse() 
+	{
+		$this->set('title_for_layout', __('Upload Contacts from a File'));
+		$this->loadModel('MemberList');
+		$this->loadModel('User');
+		$this->loadModel('Plan');
+		$this->loadModel('UserPlanRelation');
+		$this->loadModel('ContactListRelation');
+		$user_id = $this->Auth->user('id');	
+		$default_plan_id = 9;	
+		$memberList = $this->MemberList->find('list',array('conditions' => array('user_id' => $user_id),
+								'order' => array('MemberList.created' => 'DESC')));
+		$currentPlan = $this->UserPlanRelation->find('all', array('conditions' => array('UserPlanRelation.user_id' =>$user_id,'UserPlanRelation.status' => 'active')));						
+		$error_list = '';
+		$this->layout = 'admin';
+		$listIdArray = "";
+		$dbTableField = array('prefix','fname','lname','suffix','address1','address2','city','state','zip','business','phone','fax','email');
+		if(!empty($this->request->data))
+		{
+			$this->loadModel('ListContact');
+			$filename = $this->request->data['ListContact']['csv']['name'];
+			if(isset($this->request->data['ListContact']['memberlist']) && is_array($this->request->data['ListContact']['memberlist'])&&count($this->request->data['ListContact']['memberlist']))
+			{
+				if(is_array($this->request->data['ListContact']['memberlist']))
+				{
+					if($filename!='')
+					{
+						$this->request->data['User']['file_name'] = $filename;
+						$fileExt = explode(".", $filename);
+						$fileExt2 = end($fileExt);
+
+						$filepath =$this->request->data['ListContact']['csv']['tmp_name'];
+						if($fileExt2=='csv')
+						{
+							App::import("Vendor","parsecsv");
+							$csv = new parseCSV();
+							$csv->auto($filepath);
+							$uploadTitle = array();
+							$uploadFileData = array();
+							
+							foreach ($csv->titles as $value)
+							{
+								$uploadTitle[] =$value;
+								if(!in_array(trim($value),$dbTableField))
+								{
+									$this->Session->setFlash('Your csv file is not formated.You can download sample csv for your guidence.'); 	
+									$this->redirect(array('action' => 'browse'));
+								}
+							}
+							
+							foreach ($csv->data as $row)
+							{
+								$fileData = array();
+								foreach ($uploadTitle as $tvalue)
+								{
+									 $fileData[$tvalue] = $row[$tvalue]; 
+								}
+								
+								$uploadFileData[] =$fileData;
+							}
+							
+							
+							
+			if(count($currentPlan))
+		{
+			$default_plan_id = $currentPlan[0]['UserPlanRelation']['plan_id'];
+		}
+
+		$countmemberList = $this->MemberList->find('list',array('fields' => array('id'),'conditions' => array('MemberList.user_id' => $user_id),'order' => array('MemberList.created' => 'DESC')));
+		$total = 0;
+		foreach ($countmemberList as $mem)
+		{
+		  	$countcontacts = $this->ContactListRelation->find('count', array( 'conditions' => array('ContactListRelation.member_list_id' => $mem) ));
+		  	$total = $countcontacts+$total;
+		}
+		
+		$subscriber_limit = $this->Plan->find('first',array('fields' => array('subscriber_limit'),'conditions' => array('Plan.id' => $default_plan_id)));
+	    $subscriber_limit = $subscriber_limit['Plan']['subscriber_limit'];
+		$contactlimit = $subscriber_limit - $total ;
+		$uoploadcount = count($uploadFileData);
+		$memberlistcount = count($this->request->data['ListContact']['memberlist']);
+		$uoploadcount = $memberlistcount * $uoploadcount;
+		
+			 if($contactlimit < $uoploadcount)
+		{
+				if($contactlimit > 0)
+					{
+				$msglimit = $contactlimit ;	
+				$this->Session->setFlash(__('Your account add contact limit is '.$msglimit.'. So now you can  add only '.$msglimit.' contact.'), 'default', array('class' => 'error'));				
+					}
+					else
+					{
+	$this->Session->setFlash(__('Your account add contact limit has been reached. So now you can not add more contact.If still you want to add more contact you need to upgrade your plan.'), 'default', array('class' => 'error'));
+		}
+				 $this->redirect(array('action' => 'index'));
+		}
+							
+							
+	
+							
+		
+							if(count($uploadFileData))
+							{
+								foreach ($uploadFileData as $row)
+								{
+									foreach ($row as $key=>$val)
+									{
+										$this->request->data['ListContact'][$key] = htmlspecialchars($val);
+									}
+									$this->request->data['ListContact']['status'] = 1;
+									
+									$this->ListContact->set($this->request->data);
+									$listIdArray = $this->request->data['ListContact']['memberlist'];
+									if($this->ListContact->validates())
+									{
+										$this->ListContact->create();
+										if($this->ListContact->save($this->request->data))
+										{
+											$contactId = $this->ListContact->getLastInsertID();
+											$memberListArray =  $this->request->data['ListContact']['memberlist'];
+											$isConfirmed = 1;
+											if($this->request->data['ListContact']['confirm'])
+											{
+												$isConfirmed = 0;
+											}
+
+
+											foreach ($memberListArray as $key => $val)
+											{
+												$listId = $val;
+												$this->loadModel('ContactListRelation');
+												$this->request->data['ContactListRelation']['list_contact_id']=$contactId;
+												$this->request->data['ContactListRelation']['member_list_id']=$listId;
+												$this->request->data['ContactListRelation']['confirmed']=$isConfirmed;
+												if($isConfirmed)
+												{
+													$this->request->data['ContactListRelation']['status']='active';
+												}
+												$this->ContactListRelation->set($this->request->data);
+												$this->ContactListRelation->create();
+												$this->ContactListRelation->save($this->request->data);
+												$lastId = $this->ContactListRelation->getLastInsertId();
+												if(!$isConfirmed)
+												{
+													$this->sendConfirmation($this->request->data['ListContact']['email'],$lastId,$listId);
+												}
+												
+												$signupReceiver = $this->request->data['ListContact']['email'];
+												$listId = $listId;
+												$welcomeId = $this->checkWelcomeMessageEnableOnebyone($listId);
+												if(intval($welcomeId)&&$isConfirmed)
+												{
+													$this->sendSignupWelcomeMessage($welcomeId,$signupReceiver,'list',$lastId);
+												}
+											}
+										}
+									}
+								}
+
+							}
+
+							$this->Session->setFlash('Contact created successfully.'); 
+							$this->redirect(array('action' => 'index'));
+						}
+						else
+						{
+							$this->ListContact->validationErrors['csv'] = 'Only csv file is allowed.';
+						}
+					}
+					else
+					{
+						$this->ListContact->validationErrors['csv'] = 'Please upload csv file.';
+					}
+				}
+				else
+				{
+					//$this->ListContact->validationErrors['memberlist'] = 'You must check at least one list.';
+					$error_list = 'You must create list first.';
+				}
+			}
+			else
+			{
+				//$this->ListContact->validationErrors['memberlist'] = 'You must check at least one list.';
+				$error_list = 'You must create list first.';
+			}
+				
+		}
+		
+		$this->set(compact('memberList','error_list','listIdArray'));
+	}
+	public function copycontact() 
+	{
+		$this->set('title_for_layout', __('Copy & Paste Contacts'));
+		$this->loadModel('MemberList');
+		$this->loadModel('User');
+		$this->loadModel('Plan');
+		$this->loadModel('UserPlanRelation');
+		$this->loadModel('ContactListRelation');
+		$user_id = $this->Auth->user('id');	
+		$default_plan_id = 9;		
+		$memberList = $this->MemberList->find('list',array('conditions' => array('user_id' => $user_id),'order' => array('MemberList.created' => 'DESC')));
+		$currentPlan = $this->UserPlanRelation->find('all', array('conditions' => array('UserPlanRelation.user_id' =>$user_id,'UserPlanRelation.status' => 'active')));
+		$error_list = '';
+		$this->layout = 'admin';
+		$listIdArray = "";
+		if(!empty($this->request->data))
+		{
+			$this->loadModel('ListContact');
+
+			if(isset($this->request->data['ListContact']['memberlist'])&& is_array($this->request->data['ListContact']['memberlist'])&&count($this->request->data['ListContact']['memberlist']))
+			{
+				$listIdArray = $this->request->data['ListContact']['memberlist'];
+				if(is_array($this->request->data['ListContact']['memberlist']))
+				{
+					$this->request->data['ListContact']['status'] = 1;
+					
+					if(is_array($this->request->data['ListContact']['memberlist']))
+					{
+						if($this->request->data['ListContact']['contact']!='')
+						{
+							$emailArray = array();
+							$contact = $this->request->data['ListContact']['contact'];
+							$contact = str_replace(",","\n", $contact);
+							$contact = str_replace("\"","", $contact);
+							$contact = str_replace('\'',"", $contact);
+							
+							$emailFilter1 = explode("\n", $contact);
+							
+							if(count($emailFilter1))
+							{
+								foreach ($emailFilter1 as $row)
+								{	
+									if(trim($row)!='' && filter_var(trim($row), FILTER_VALIDATE_EMAIL))
+									{
+										$emailArray[] = $row;
+									}
+								}
+							}
+					if(count($currentPlan))
+		{
+			$default_plan_id = $currentPlan[0]['UserPlanRelation']['plan_id'];
+		}
+
+		$countmemberList = $this->MemberList->find('list',array('fields' => array('id'),'conditions' => array('MemberList.user_id' => $user_id),'order' => array('MemberList.created' => 'DESC')));
+		$total = 0;
+		foreach ($countmemberList as $mem)
+		{
+		  	$countcontacts = $this->ContactListRelation->find('count', array( 'conditions' => array('ContactListRelation.member_list_id' => $mem) ));
+		  	$total = $countcontacts+$total;
+		}
+		
+		$subscriber_limit = $this->Plan->find('first',array('fields' => array('subscriber_limit'),'conditions' => array('Plan.id' => $default_plan_id)));
+	    $subscriber_limit = $subscriber_limit['Plan']['subscriber_limit'];
+		$contactlimit = $subscriber_limit - $total ;
+		$uoploadcount = count($emailArray);
+		 $memberlistcount = count($this->request->data['ListContact']['memberlist']);
+		$uoploadcount = $memberlistcount * $uoploadcount;
+		 
+		 if($contactlimit < $uoploadcount)
+		{
+				if($contactlimit > 0)
+					{
+				$msglimit = $contactlimit ;	
+	$this->Session->setFlash(__('Your account add contact limit is '.$msglimit.'. So now you can  add only '.$msglimit.' contact.'), 'default', array('class' => 'error'));				
+					}
+					else
+					{
+	$this->Session->setFlash(__('Your account add contact limit has been reached. So now you can not add more contact.If still you want to add more contact you need to upgrade your plan.'), 'default', array('class' => 'error'));						
+
+		}
+				 $this->redirect(array('action' => 'index'));
+		}
+							
+
+							if(count($emailArray))
+							{
+								foreach ($emailArray as $email)
+								{
+									$this->request->data['ListContact']['email'] = $email;
+									
+									$this->ListContact->set($this->request->data);
+									$this->ListContact->create();
+									if($this->ListContact->save($this->request->data))
+									{
+										$contactId = $this->ListContact->getLastInsertID();
+										$memberListArray =  $this->request->data['ListContact']['memberlist'];
+										$isConfirmed = 1;
+										if($this->request->data['ListContact']['confirm'])
+										{
+											$isConfirmed = 0;
+										}
+										foreach ($memberListArray as $key => $val)
+										{
+											$listId = $val;
+											$this->loadModel('ContactListRelation');
+											$this->request->data['ContactListRelation']['list_contact_id']=$contactId;
+											$this->request->data['ContactListRelation']['member_list_id']=$listId;
+											$this->request->data['ContactListRelation']['confirmed']=$isConfirmed;
+											if($isConfirmed)
+											{
+												$this->request->data['ContactListRelation']['status']='active';
+											}
+											
+											$this->ContactListRelation->set($this->request->data);
+											$this->ContactListRelation->create();
+											$this->ContactListRelation->save($this->request->data);
+											$lastId = $this->ContactListRelation->getLastInsertId();
+											if(!$isConfirmed)
+											{
+												$this->sendConfirmation($this->request->data['ListContact']['email'],$lastId,$listId);
+											}
+											
+											$signupReceiver = $this->request->data['ListContact']['email'];
+											$listId = $listId;
+											$welcomeId = $this->checkWelcomeMessageEnableOnebyone($listId);
+											if(intval($welcomeId)&&$isConfirmed)
+											{
+												$this->sendSignupWelcomeMessage($welcomeId,$signupReceiver,'list',$lastId);
+											}
+										}
+									}
+								}
+								$this->Session->setFlash('All contacts successfully added to your list.'); 
+								$this->redirect(array('action' => 'index'));
+							}
+							else 
+							{
+								$this->ListContact->validationErrors['contact'][0] = 'You must past valid email.';
+							}
+						}
+						else 
+						{
+							$this->ListContact->validationErrors['contact'][0] = 'You must past at least one email.';
+						}
+					}
+
+
+						
+				}
+				else
+				{
+					//$this->ListContact->validationErrors['memberlist'] = 'You must check at least one list.';
+					$error_list = 'You must create list first.';
+				}
+			}
+			else
+			{
+				//$this->ListContact->validationErrors['memberlist'] = 'You must check at least one list.';
+				$error_list = 'You must create list first.';
+			}
+		}
+		
+		$this->set(compact('memberList','error_list','listIdArray'));
+	}
+	public function edit($id)
+	{
+		$this->set('title_for_layout', __('Edit contact'));
+		$this->loadModel('ListContact');
+		$this->loadModel('MemberList');
+		$this->loadModel('ContactListRelation');
+		$user_id = $this->Auth->user('id');		
+		$memberList = $this->MemberList->find('list',array('conditions' => array('user_id' => $user_id),
+								'order' => array('MemberList.created' => 'DESC')));
+		$error_list = '';
+		$this->layout = 'admin';
+		if(!empty($this->request->data))
+		{	
+			$this->loadModel('ListContact');
+		    $this->request->data['ListContact']['email'] = htmlspecialchars($this->request->data['ListContact']['email']);
+		    $this->request->data['ListContact']['prefix'] = htmlspecialchars($this->request->data['ListContact']['prefix']);
+		    $this->request->data['ListContact']['fname'] = htmlspecialchars($this->request->data['ListContact']['fname']);
+		    $this->request->data['ListContact']['lname'] = htmlspecialchars($this->request->data['ListContact']['lname']);
+		    $this->request->data['ListContact']['suffix'] = htmlspecialchars($this->request->data['ListContact']['suffix']);
+		    $this->request->data['ListContact']['address1'] = htmlspecialchars($this->request->data['ListContact']['address1']);
+		    $this->request->data['ListContact']['address2'] = htmlspecialchars($this->request->data['ListContact']['address2']);
+		    $this->request->data['ListContact']['city'] = htmlspecialchars($this->request->data['ListContact']['city']);
+		    $this->request->data['ListContact']['state'] = htmlspecialchars($this->request->data['ListContact']['state']);
+		    $this->request->data['ListContact']['zip'] = htmlspecialchars($this->request->data['ListContact']['zip']);
+		    $this->request->data['ListContact']['business'] = htmlspecialchars($this->request->data['ListContact']['business']);
+		    $this->request->data['ListContact']['phone'] = htmlspecialchars($this->request->data['ListContact']['phone']);
+		    $this->request->data['ListContact']['fax'] = htmlspecialchars($this->request->data['ListContact']['fax']);
+
+			$this->request->data['ListContact']['status'] = 1;
+			$this->ListContact->set($this->request->data);
+			
+			if($this->ListContact->validates())
+			{ 
+				if(is_array($this->request->data['ListContact']['memberlist']))
+				{
+					$this->ListContact->id = $id;  
+					if($this->ListContact->save($this->request->data))
+					{
+						$contactId = $id;
+						$memberListArray =  $this->request->data['ListContact']['memberlist'];
+					
+						$isConfirmed = 1;
+						$this->loadModel('ContactListRelation');
+						$this->ContactListRelation->recursive = 0;
+						$conditions = array('ContactListRelation.list_contact_id' => $id);
+						$this->ContactListRelation->deleteAll($conditions); 	
+						
+						foreach ($memberListArray as $key => $val)
+						{	
+							$listId = $val;
+							$this->request->data['ContactListRelation']['list_contact_id']=$contactId;
+							$this->request->data['ContactListRelation']['member_list_id']=$listId;
+							$this->request->data['ContactListRelation']['confirmed']=$isConfirmed;
+							$this->ContactListRelation->set($this->request->data);
+							$this->ContactListRelation->create();  
+							$this->ContactListRelation->save($this->request->data);
+						}
+						$this->request->data=null;
+						$this->Session->setFlash('Contact updated successfully.'); 
+						$this->redirect(array('action' => 'allcontacts'));
+					}
+				}
+				else 
+				{
+					//$this->ListContact->validationErrors['memberlist'] = 'You must check at least one list.';
+					$error_list = 'You must check at least one list.';
+				}
+			}
+			else 
+			{
+				if(!is_array($this->request->data['ListContact']['memberlist']))
+				{
+					//$this->ListContact->validationErrors['memberlist'] = 'You must check at least one list.';
+					$error_list = 'You must create list first.';
+				}	
+			}
+			
+			
+		}
+		$this->loadModel('ContactListRelation');
+		$this->ContactListRelation->recursive = 0;
+		$listIdDetailArray = $this->ContactListRelation->find('all',array('conditions' => array('ContactListRelation.list_contact_id' => $id)));
+		$listIdArray = "";
+		if(count($listIdDetailArray))
+		{
+			for($i =0 ;$i<count($listIdDetailArray);$i++)
+			{
+				$listIdArray[] = $listIdDetailArray[$i]['ContactListRelation']['member_list_id'];
+			}
+		}
+		$this->ListContact->recursive = 0;
+		$ContactInfo = $this->ListContact->find('first',array('conditions' =>array('ListContact.id' => $id)));
+		$this->set(compact('memberList','error_list','ContactInfo','id','listIdArray'));
+	}
+	public function delete($contact_id,$relation_id)
+	{
+		$this->set('title_for_layout', __('Delete contact'));
+		$this->layout = 'admin';
+		if($contact_id!=''&&$relation_id!='')
+		{
+			$this->loadModel('ListContact');
+			$this->loadModel('ContactListRelation');
+			$this->loadModel('User');
+			$this->loadModel('MemberList');
+			$memberSendStatus = 0;
+		    $memberSendEmail  = 0;
+			$memberListName   = "";
+			$signupReceiver   ="";
+			$list = $this->ContactListRelation->find('first',array('conditions' => array('ContactListRelation.id' => $relation_id)));
+
+			if(count($list)>0)
+			{
+				$sendMemberMail = $this->MemberList->find('first',array('conditions' => array('MemberList.id' => $list['ContactListRelation']['member_list_id'])));
+			}
+			if(count($sendMemberMail)>0)
+			{
+				$memberSendStatus = $sendMemberMail['MemberList']['email_notification'];
+				$memberListName	  = $sendMemberMail['MemberList']['name'];
+				$memberMail = $this->User->find('first',array('conditions' => array('User.id' => $sendMemberMail['MemberList']['user_id'])));
+				$memberSendEmail  = $memberMail['User']['email'];
+				$signupReceiver   = $list['ListContact']['email'];
+			}
+			if($memberSendStatus)
+			{
+				$this->sendDeleteContactMail($memberSendEmail,$signupReceiver,$memberListName,1);
+			}
+			
+			$this->Session->setFlash('Contact email-id has been deleted.'); 
+			$this->ContactListRelation->recursive = 0;
+			$this->ContactListRelation->delete($relation_id);
+		}
+		$this->redirect(array('controller' => 'listContacts','action' => 'allcontacts'));
+	}
+	public function allcontacts($listId = 0)
+	{
+		$this->set('title_for_layout', __('Browse Contacts'));
+		$this->layout = 'admin';
+		$user_id = $this->Auth->user('id');
+		$this->loadModel('ListContact');
+		$this->loadModel('MemberList');
+		$this->loadModel('ContactListRelation');
+		
+		$this->MemberList->recursive = 0;
+		$userList = $this->MemberList->find('all', array('fields' => array('id','name'),'conditions' => array('MemberList.user_id' =>$user_id), 'order' => array('MemberList.created' => 'DESC')));
+		$userListArray = "";
+		$userListDetailArray[0] ='Select a List or Segment';
+		$default_selected = 0;
+		if(count($userList))
+		{
+			foreach ($userList as $row)
+			{
+				$userListArray[] =$row['MemberList']['id'];
+				$userListDetailArray[$row['MemberList']['id']] = $row['MemberList']['name'];
+			}
+		}
+		if($listId)
+		{
+			$userListArray = $listId ;
+			$default_selected = $listId ;
+		}
+		if(count($userListArray))
+		{
+			$this->ContactListRelation->recursive = 1;
+			$this->paginate = array(
+									'limit' => 50,
+									'conditions' => array('ContactListRelation.member_list_id ' => $userListArray),
+									'order' => array('ContactListRelation.list_contact_id' => 'DESC')
+								);				
+			$ListContact = $this->paginate('ContactListRelation');
+			//pr($ListContact);die();
+			$this->set(compact('ListContact','userListDetailArray','default_selected'));	
+		}
+	}
+	
+	public function confirmationsuccess($contactId = 0)
+	{
+		$this->set('title_for_layout', __('Member List confirmation'));
+		$this->layout = 'default';
+		if($contactId !="0")
+		{
+			$contactId = base64_decode($contactId);
+			$this->loadModel('ContactListRelation');
+			$this->request->data['ContactListRelation']['confirmed'] = 1;
+			$this->request->data['ContactListRelation']['status'] = 'active';
+			$this->ContactListRelation->set($this->request->data);
+			$this->ContactListRelation->id = trim($contactId);
+			$this->ContactListRelation->save($this->request->data);
+
+			$ContactListRelation  = $this->ContactListRelation->find('all',array('conditions' => array('ContactListRelation.id' => $contactId)));
+			if(count($ContactListRelation))
+			{
+				$Id = $ContactListRelation[0]['ContactListRelation']['list_contact_id'];
+				$this->loadModel('ListContact');
+				$contact = $this->ListContact->find('all',array('conditions' => array('ListContact.id' => $Id)));
+				if(count($contact))
+				{
+					$email   = $contact[0]['ListContact']['email'];
+					$signupReceiver = $email;
+					$listId = $ContactListRelation[0]['ContactListRelation']['member_list_id'];
+					$welcomeId = $this->checkWelcomeMessageEnableOnebyone($listId);
+					if(intval($welcomeId))
+					{
+						$this->sendSignupWelcomeMessage($welcomeId,$signupReceiver,'list',$contactId);
+					}
+				}
+			}
+		}
+	}
+	public function changeStatus($relationId,$change)
+	{
+		$this->loadModel('ContactListRelation');
+		$this->request->data['ContactListRelation']['status'] = $change;
+		$this->ContactListRelation->set($this->request->data);
+		$this->ContactListRelation->id = $relationId;
+		$this->ContactListRelation->save($this->request->data);
+		$this->Session->setFlash('Successfully changed status.'); 
+		$this->redirect(array('action' => 'allcontacts'));
+	}
+	public function transfercontact($id = 0)
+	{
+		 
+		$this->set('title_for_layout', __('Transfer contacts of list'));
+		$this->layout = 'admin';
+		$user_id = $this->Auth->user('id');		
+		$this->loadModel('MemberList');
+		$this->loadModel('ContactListRelation');
+		$errorList = "";
+		if(!empty($this->request->data)){
+			 
+			$cList = $this->request->data['ContactListRelation']['cList'];
+			$nList = $this->request->data['ContactListRelation']['nList'];
+			if($nList!="")
+			{
+				$relationArray = $this->ContactListRelation->find('all', array('conditions' => array('ContactListRelation.member_list_id'=>$cList)));
+				if(count($relationArray))
+				{
+					foreach ($relationArray as $row)
+					{
+						$this->request->data['ContactListRelation']['member_list_id']=$nList;
+						$this->request->data['ContactListRelation']['list_contact_id']=$row['ContactListRelation']['list_contact_id'];
+						$this->request->data['ContactListRelation']['confirmed']=$row['ContactListRelation']['confirmed'];
+						$this->ContactListRelation->set($this->request->data);
+						$this->ContactListRelation->id = $row['ContactListRelation']['id'];
+						$this->ContactListRelation->save($this->request->data);
+					}
+				}
+				$this->redirect(array('controller'=>'memberLists', 'action' => 'delete', $id));
+			}
+			else
+			{
+				$errorList = "You must select new list.";
+			}
+		}
+		
+		$currentList = $this->MemberList->find('list',array('conditions' => array('MemberList.id' => $id)));
+		$list = $this->MemberList->find('list',array('conditions' => array('user_id' => $user_id,'MemberList.id <>' => $id), 'order' => array('MemberList.created' => 'DESC')));
+		$this->set(compact('currentList','list','id','errorList'));
+		
+	}
+}
