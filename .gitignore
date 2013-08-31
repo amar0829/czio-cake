@@ -12,7 +12,8 @@ class ListContactsController extends AppController{
 	public $components = array(
 		'Email',
 	);
-	public function beforeFilter() {
+	this is test
+	publicabl function beforeFilter() {
 		parent::beforeFilter();
 	}
 
@@ -20,6 +21,7 @@ class ListContactsController extends AppController{
 	{
 		$this->set('title_for_layout', __('Member List Contacts'));
 		$this->layout = 'admin';
+		thi;
 	}
 	public function add() 
 	{
